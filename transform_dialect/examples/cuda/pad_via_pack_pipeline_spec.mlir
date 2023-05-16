@@ -56,28 +56,29 @@ transform.sequence failures(propagate) {
   %pad = transform.structured.match ops{["tensor.pad"]} in %variant_op
     : (!pdl.operation) -> !pdl.operation
 
-  %forall_pad, %tiled_pad = transform.structured.tile_to_forall_op %pad
+  %forall_l1, %tiled_pad = transform.structured.tile_to_forall_op %pad
     tile_sizes [8, 32] ( mapping = [#gpu.block<y>, #gpu.block<x>] )
   transform.iree.populate_workgroup_count_region_using_num_threads_slice
-    %forall_pad : (!pdl.operation) -> ()
+    %forall_l1 : (!pdl.operation) -> ()
 
   // There might be an additional level of tiling needed, e.g. first-level
   // tiling has tile sizes [8, 128], second-level has tile sizes [1, 4]. In
   // that case, we should be prepared to vectorize `scf.if`, because we won't
   // be able to take the assumed branch as we do now for the first level of
   // tiling.
-  %if = transform.structured.match ops{["scf.if"]} in %forall_pad
+  %if = transform.structured.match ops{["scf.if"]} in %forall_l1
     : (!pdl.operation) -> !transform.any_op
   transform.scf.take_assumed_branch %if take_else_branch
     : (!transform.any_op) -> ()
 
   transform.iree.apply_patterns %variant_op
-    {canonicalization, cse, licm, tiling_canonicalization} : (!pdl.operation) -> ()
+    {canonicalization, cse, fold_flow, licm, tiling_canonicalization}
+    : (!pdl.operation) -> ()
 
   transform.print %variant_op {name = "after tiling"} : !pdl.operation
 
   // Step 3. Vectorize pad.
-  %pad_inside = transform.structured.match ops{["tensor.pad"]} in %forall_pad
+  %pad_inside = transform.structured.match ops{["tensor.pad"]} in %forall_l1
     : (!pdl.operation) -> !pdl.operation
 
   transform.structured.masked_vectorize %pad_inside vector_sizes [8, 32]
